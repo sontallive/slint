@@ -1,7 +1,7 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
-use super::{RepaintBufferType, SoftwareRenderer};
+use super::{GlyphIdStrategy, GlyphProvider, RepaintBufferType, SoftwareRenderer};
 use alloc::rc::{Rc, Weak};
 use core::cell::Cell;
 use i_slint_core::api::Window;
@@ -43,6 +43,21 @@ impl MinimalSoftwareWindow {
         } else {
             false
         }
+    }
+
+    /// Register a glyph provider for dynamic glyph rendering.
+    pub fn set_glyph_provider(&self, provider: Option<Rc<dyn GlyphProvider>>) {
+        self.renderer.set_glyph_provider(provider);
+    }
+
+    /// Select the glyph-id strategy used by the glyph provider.
+    pub fn set_glyph_id_strategy(&self, strategy: GlyphIdStrategy) {
+        self.renderer.set_glyph_id_strategy(strategy);
+    }
+
+    /// Configure the glyph bitmap cache size (bytes) per font.
+    pub fn set_glyph_cache_bytes(&self, bytes: usize) {
+        self.renderer.set_glyph_cache_bytes(bytes);
     }
 
     #[cfg(feature = "experimental")]

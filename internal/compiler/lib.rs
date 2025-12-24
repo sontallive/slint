@@ -102,6 +102,9 @@ pub struct CompilerConfiguration {
     /// Indicate whether to embed resources such as images in the generated output or whether
     /// to retain references to the resources on the file system.
     pub embed_resources: EmbedResourcesKind,
+    /// Enable pre-rendering and embedding of bitmap fonts when using `EmbedTextures`.
+    #[cfg(feature = "software-renderer")]
+    pub embed_glyphs: bool,
     /// Whether to use SDF when pre-rendering fonts.
     #[cfg(all(feature = "software-renderer", feature = "sdf-fonts"))]
     pub use_sdf_fonts: bool,
@@ -235,6 +238,8 @@ impl CompilerConfiguration {
 
         Self {
             embed_resources,
+            #[cfg(feature = "software-renderer")]
+            embed_glyphs: true,
             include_paths: Default::default(),
             library_paths: Default::default(),
             style: Default::default(),

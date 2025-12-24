@@ -1,0 +1,107 @@
+// Copyright © SixtyFPS GmbH <info@slint.dev>
+// SPDX-License-Identifier: MIT
+
+import { LineEdit, Button } from "std-widgets.slint";
+
+export component DynamicGlyphTest inherits Window {
+    title: "Dynamic Glyph Provider - Desktop Demo";
+    width: 420px;
+    height: 300px;
+    default-font-family: "DynamicGlyphTest";
+
+    in-out property <string> input_text: "你好世界 Hello World!";
+    in-out property <string> strategy_label: "";
+
+    callback strategy_changed() -> string;
+
+    Rectangle {
+        background: #f5f5f5;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+
+            // Header
+            Rectangle {
+                height: 30px;
+                HorizontalLayout {
+                    alignment: space-between;
+
+                    Text {
+                        text: "Dynamic Glyph Provider Demo";
+                        color: #222;
+                        font-size: 16px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "Strategy: " + root.strategy_label;
+                        color: #666;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Input section
+            Rectangle {
+                background: white;
+                border-radius: 4px;
+                height: 40px;
+
+                LineEdit {
+                    text <=> root.input_text;
+                    placeholder-text: "Type text here to test glyph rendering...";
+                    font-size: 14px;
+                }
+            }
+
+            // Preview section
+            Rectangle {
+                background: white;
+                border-radius: 4px;
+                min-height: 120px;
+
+                VerticalLayout {
+                    padding: 12px;
+
+                    Text {
+                        text: "Preview:";
+                        color: #888;
+                        font-size: 11px;
+                    }
+
+                    Text {
+                        text: root.input_text;
+                        font-size: 32px;
+                        wrap: word-wrap;
+                        color: #000;
+                    }
+                }
+            }
+
+            // Info section
+            Rectangle {
+                height: 40px;
+                background: #e8f4f8;
+                border-radius: 4px;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    alignment: center;
+
+                    Text {
+                        text: "This example demonstrates custom glyph rendering with the SoftwareRenderer";
+                        color: #0066aa;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

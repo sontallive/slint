@@ -17,6 +17,7 @@ extern crate std;
 mod draw_functions;
 mod fixed;
 mod fonts;
+mod glyph_provider;
 mod minimal_software_window;
 #[cfg(feature = "path")]
 mod path;
@@ -24,6 +25,9 @@ mod scene;
 
 use self::fonts::GlyphRenderer;
 pub use self::minimal_software_window::MinimalSoftwareWindow;
+pub use self::fonts::GlyphAlphaMap;
+pub use self::glyph_provider::{GlyphIdStrategy, GlyphProvider, ProviderFontMetrics, ProviderGlyphBitmap};
+pub use i_slint_core::graphics::FontRequest;
 use self::scene::*;
 use alloc::rc::{Rc, Weak};
 use alloc::vec::Vec;
@@ -440,6 +444,7 @@ pub struct SoftwareRenderer {
     /// Only used if repaint_buffer_type == RepaintBufferType::SwappedBuffers
     prev_frame_dirty: Cell<DirtyRegion>,
     partial_rendering_state: PartialRenderingState,
+    font_service: fonts::FontService,
     maybe_window_adapter: RefCell<Option<Weak<dyn i_slint_core::window::WindowAdapter>>>,
     rotation: Cell<RenderingRotation>,
     rendering_metrics_collector: Option<Rc<RenderingMetricsCollector>>,
@@ -450,6 +455,7 @@ impl Default for SoftwareRenderer {
         Self {
             partial_rendering_state: Default::default(),
             prev_frame_dirty: Default::default(),
+            font_service: Default::default(),
             maybe_window_adapter: Default::default(),
             rotation: Default::default(),
             rendering_metrics_collector: RenderingMetricsCollector::new("software"),
@@ -497,6 +503,25 @@ impl SoftwareRenderer {
     /// Return the current rotation. See [`Self::set_rendering_rotation()`]
     pub fn rendering_rotation(&self) -> RenderingRotation {
         self.rotation.get()
+    }
+
+    /// Register a glyph provider for dynamic glyph rendering.
+    pub fn set_glyph_provider(&self, provider: Option<Rc<dyn GlyphProvider>>) {
+        self.font_service.set_glyph_provider(provider);
+    }
+
+    /// Select the glyph-id strategy used by the glyph provider.
+    pub fn set_glyph_id_strategy(&self, strategy: GlyphIdStrategy) {
+        self.font_service.set_glyph_id_strategy(strategy);
+    }
+
+    /// Configure the glyph bitmap cache size (bytes) per font.
+    pub fn set_glyph_cache_bytes(&self, bytes: usize) {
+        self.font_service.set_glyph_cache_bytes(bytes);
+    }
+
+    fn match_font(&self, font_request: &FontRequest, scale_factor: ScaleFactor) -> fonts::Font {
+        self.font_service.match_font(font_request, scale_factor)
     }
 
     /// Render the window to the given frame buffer.
@@ -591,6 +616,7 @@ impl SoftwareRenderer {
                 dirty_region: Default::default(),
             },
             rotation,
+            &self.font_service,
         );
         let mut renderer = self.partial_rendering_state.create_partial_renderer(buffer_renderer);
         let window_adapter = renderer.window_adapter.clone();
@@ -761,10 +787,10 @@ impl RendererSealed for SoftwareRenderer {
             return LogicalSize::default();
         };
         let font_request = text_item.font_request(item_rc);
-        let font = fonts::match_font(&font_request, scale_factor);
+        let font = self.match_font(&font_request, scale_factor);
 
         #[cfg(feature = "systemfonts")]
-        if matches!(font, fonts::Font::VectorFont(_)) && !parley_disabled() {
+        if matches!(&font, fonts::Font::VectorFont(_)) && !parley_disabled() {
             return sharedparley::text_size(self, text_item, item_rc, max_width, text_wrap);
         }
 
@@ -793,6 +819,14 @@ impl RendererSealed for SoftwareRenderer {
                     text_wrap,
                 )
             }
+            fonts::Font::DynamicFont(df) => {
+                let layout = fonts::text_layout_for_font(df, &font_request, scale_factor);
+                layout.text_size(
+                    &string,
+                    max_width.map(|max_width| (max_width.cast() * scale_factor).cast()),
+                    text_wrap,
+                )
+            }
         };
         (PhysicalSize::from_lengths(longest_line_width, height).cast() / scale_factor).cast()
     }
@@ -807,7 +841,7 @@ impl RendererSealed for SoftwareRenderer {
             return LogicalSize::default();
         };
         let font_request = text_item.font_request(item_rc);
-        let font = fonts::match_font(&font_request, scale_factor);
+        let font = self.match_font(&font_request, scale_factor);
 
         match (font, parley_disabled()) {
             #[cfg(feature = "systemfonts")]
@@ -831,6 +865,14 @@ impl RendererSealed for SoftwareRenderer {
                 (PhysicalSize::from_lengths(longest_line_width, height).cast() / scale_factor)
                     .cast()
             }
+            (fonts::Font::DynamicFont(df), _) => {
+                let mut buf = [0u8, 0u8, 0u8, 0u8];
+                let layout = fonts::text_layout_for_font(&df, &font_request, scale_factor);
+                let (longest_line_width, height) =
+                    layout.text_size(ch.encode_utf8(&mut buf), None, TextWrap::NoWrap);
+                (PhysicalSize::from_lengths(longest_line_width, height).cast() / scale_factor)
+                    .cast()
+            }
         }
     }
 
@@ -841,7 +883,7 @@ impl RendererSealed for SoftwareRenderer {
         let Some(scale_factor) = self.scale_factor() else {
             return i_slint_core::items::FontMetrics::default();
         };
-        let font = fonts::match_font(&font_request, scale_factor);
+        let font = self.match_font(&font_request, scale_factor);
 
         match (font, parley_disabled()) {
             #[cfg(feature = "systemfonts")]
@@ -873,6 +915,19 @@ impl RendererSealed for SoftwareRenderer {
                     cap_height: cap_height.get() as _,
                 }
             }
+            (fonts::Font::DynamicFont(font), _) => {
+                let ascent: LogicalLength = (font.ascent().cast() / scale_factor).cast();
+                let descent: LogicalLength = (font.descent().cast() / scale_factor).cast();
+                let x_height: LogicalLength = (font.x_height().cast() / scale_factor).cast();
+                let cap_height: LogicalLength = (font.cap_height().cast() / scale_factor).cast();
+
+                i_slint_core::items::FontMetrics {
+                    ascent: ascent.get() as _,
+                    descent: descent.get() as _,
+                    x_height: x_height.get() as _,
+                    cap_height: cap_height.get() as _,
+                }
+            }
         }
     }
 
@@ -886,7 +941,7 @@ impl RendererSealed for SoftwareRenderer {
             return 0;
         };
         let font_request = text_input.font_request(item_rc);
-        let font = fonts::match_font(&font_request, scale_factor);
+        let font = self.match_font(&font_request, scale_factor);
 
         match (font, parley_disabled()) {
             #[cfg(feature = "systemfonts")]
@@ -950,6 +1005,34 @@ impl RendererSealed for SoftwareRenderer {
                     paragraph.byte_offset_for_position((pos.x_length(), pos.y_length())),
                 )
             }
+            (fonts::Font::DynamicFont(df), _) => {
+                let visual_representation = text_input.visual_representation(None);
+
+                let width = (text_input.width().cast() * scale_factor).cast();
+                let height = (text_input.height().cast() * scale_factor).cast();
+
+                let pos = (pos.cast() * scale_factor)
+                    .clamp(euclid::point2(0., 0.), euclid::point2(i16::MAX, i16::MAX).cast())
+                    .cast();
+
+                let layout = fonts::text_layout_for_font(&df, &font_request, scale_factor);
+
+                let paragraph = TextParagraphLayout {
+                    string: &visual_representation.text,
+                    layout,
+                    max_width: width,
+                    max_height: height,
+                    horizontal_alignment: text_input.horizontal_alignment(),
+                    vertical_alignment: text_input.vertical_alignment(),
+                    wrap: text_input.wrap(),
+                    overflow: TextOverflow::Clip,
+                    single_line: false,
+                };
+
+                visual_representation.map_byte_offset_from_byte_offset_in_visual_text(
+                    paragraph.byte_offset_for_position((pos.x_length(), pos.y_length())),
+                )
+            }
         }
     }
 
@@ -963,7 +1046,7 @@ impl RendererSealed for SoftwareRenderer {
             return LogicalRect::default();
         };
         let font_request = text_input.font_request(item_rc);
-        let font = fonts::match_font(&font_request, scale_factor);
+        let font = self.match_font(&font_request, scale_factor);
 
         match (font, parley_disabled()) {
             #[cfg(feature = "systemfonts")]
@@ -1032,6 +1115,40 @@ impl RendererSealed for SoftwareRenderer {
 
                 let cursor_position = paragraph.cursor_pos_for_byte_offset(byte_offset);
                 let cursor_height = pf.height();
+
+                (PhysicalRect::new(
+                    PhysicalPoint::from_lengths(cursor_position.0, cursor_position.1),
+                    PhysicalSize::from_lengths(
+                        (text_input.text_cursor_width().cast() * scale_factor).cast(),
+                        cursor_height,
+                    ),
+                )
+                .cast()
+                    / scale_factor)
+                    .cast()
+            }
+            (fonts::Font::DynamicFont(df), _) => {
+                let visual_representation = text_input.visual_representation(None);
+
+                let width = (text_input.width().cast() * scale_factor).cast();
+                let height = (text_input.height().cast() * scale_factor).cast();
+
+                let layout = fonts::text_layout_for_font(&df, &font_request, scale_factor);
+
+                let paragraph = TextParagraphLayout {
+                    string: &visual_representation.text,
+                    layout,
+                    max_width: width,
+                    max_height: height,
+                    horizontal_alignment: text_input.horizontal_alignment(),
+                    vertical_alignment: text_input.vertical_alignment(),
+                    wrap: text_input.wrap(),
+                    overflow: TextOverflow::Clip,
+                    single_line: false,
+                };
+
+                let cursor_position = paragraph.cursor_pos_for_byte_offset(byte_offset);
+                let cursor_height = df.height();
 
                 (PhysicalRect::new(
                     PhysicalPoint::from_lengths(cursor_position.0, cursor_position.1),
@@ -1292,6 +1409,7 @@ fn prepare_scene(
         window,
         PrepareScene::default(),
         software_renderer.rotation.get(),
+        &software_renderer.font_service,
     );
     let mut renderer =
         software_renderer.partial_rendering_state.create_partial_renderer(prepare_scene);
@@ -1982,6 +2100,7 @@ struct SceneBuilder<'a, T> {
     scale_factor: ScaleFactor,
     window: &'a WindowInner,
     rotation: RotationInfo,
+    font_service: &'a fonts::FontService,
 }
 
 impl<'a, T: ProcessScene> SceneBuilder<'a, T> {
@@ -1991,6 +2110,7 @@ impl<'a, T: ProcessScene> SceneBuilder<'a, T> {
         window: &'a WindowInner,
         processor: T,
         orientation: RenderingRotation,
+        font_service: &'a fonts::FontService,
     ) -> Self {
         Self {
             processor,
@@ -2006,7 +2126,12 @@ impl<'a, T: ProcessScene> SceneBuilder<'a, T> {
             scale_factor,
             window,
             rotation: RotationInfo { orientation, screen_size },
+            font_service,
         }
+    }
+
+    fn match_font(&self, font_request: &FontRequest) -> fonts::Font {
+        self.font_service.match_font(font_request, self.scale_factor)
     }
 
     fn should_draw(&self, rect: &LogicalRect) -> bool {
@@ -2263,7 +2388,7 @@ impl<'a, T: ProcessScene> SceneBuilder<'a, T> {
                         };
 
                         let data = match &glyph.alpha_map {
-                            fonts::GlyphAlphaMap::Static(data) => {
+                            GlyphAlphaMap::Static(data) => {
                                 if glyph.sdf {
                                     let geometry = clipped_target.translate(offset).round();
                                     let origin =
@@ -2329,7 +2454,7 @@ impl<'a, T: ProcessScene> SceneBuilder<'a, T> {
                                     ),
                                 )
                             }
-                            fonts::GlyphAlphaMap::Shared(data) => {
+                            GlyphAlphaMap::Shared(data) => {
                                 let source_rect = euclid::rect(0, 0, glyph.width.0, glyph.height.0);
                                 target_pixel_buffer::TextureDataContainer::Shared {
                                     buffer: SharedBufferData::AlphaMap {
@@ -2554,10 +2679,10 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
     ) {
         let font_request = text.font_request(self_rc);
 
-        let font = fonts::match_font(&font_request, self.scale_factor);
+        let font = self.match_font(&font_request);
 
         #[cfg(feature = "systemfonts")]
-        if matches!(font, fonts::Font::VectorFont(_)) && !parley_disabled() {
+        if matches!(&font, fonts::Font::VectorFont(_)) && !parley_disabled() {
             sharedparley::draw_text(self, text, Some(self_rc), size);
             return;
         }
@@ -2612,6 +2737,22 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
 
                 self.draw_text_paragraph(&paragraph, physical_clip, offset, color, None);
             }
+            fonts::Font::DynamicFont(df) => {
+                let layout = fonts::text_layout_for_font(df, &font_request, self.scale_factor);
+                let paragraph = TextParagraphLayout {
+                    string: &string,
+                    layout,
+                    max_width: max_size.width_length(),
+                    max_height: max_size.height_length(),
+                    horizontal_alignment,
+                    vertical_alignment,
+                    wrap: text.wrap(),
+                    overflow: text.overflow(),
+                    single_line: false,
+                };
+
+                self.draw_text_paragraph(&paragraph, physical_clip, offset, color, None);
+            }
             #[cfg(feature = "systemfonts")]
             fonts::Font::VectorFont(vf) => {
                 let layout = fonts::text_layout_for_font(vf, &font_request, self.scale_factor);
@@ -2639,7 +2780,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
         size: LogicalSize,
     ) {
         let font_request = text_input.font_request(self_rc);
-        let font = fonts::match_font(&font_request, self.scale_factor);
+        let font = self.match_font(&font_request);
 
         match (font, parley_disabled()) {
             #[cfg(feature = "systemfonts")]
@@ -2779,6 +2920,90 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
                 let cursor_pos_and_height =
                     text_visual_representation.cursor_position.map(|cursor_offset| {
                         (paragraph.cursor_pos_for_byte_offset(cursor_offset), pf.height())
+                    });
+
+                if let Some(((cursor_x, cursor_y), cursor_height)) = cursor_pos_and_height {
+                    let cursor_rect = PhysicalRect::new(
+                        PhysicalPoint::from_lengths(cursor_x, cursor_y),
+                        PhysicalSize::from_lengths(
+                            (text_input.text_cursor_width().cast() * self.scale_factor).cast(),
+                            cursor_height,
+                        ),
+                    );
+
+                    if let Some(clipped_src) = cursor_rect.intersection(&physical_clip.cast()) {
+                        let geometry =
+                            clipped_src.translate(offset.cast()).transformed(self.rotation);
+                        #[allow(unused_mut)]
+                        let mut cursor_color = text_visual_representation.cursor_color;
+                        #[cfg(all(feature = "std", target_os = "macos"))]
+                        {
+                            // On macOs, the cursor color is different than other platform. Use a hack to pass the screenshot test.
+                            static IS_SCREENSHOT_TEST: std::sync::OnceLock<bool> =
+                                std::sync::OnceLock::new();
+                            if *IS_SCREENSHOT_TEST.get_or_init(|| {
+                                std::env::var_os("CARGO_PKG_NAME").unwrap_or_default()
+                                    == "test-driver-screenshots"
+                            }) {
+                                cursor_color = color;
+                            }
+                        }
+                        let args = target_pixel_buffer::DrawRectangleArgs::from_rect(
+                            geometry.cast(),
+                            self.alpha_color(cursor_color).into(),
+                        );
+                        self.processor.process_rectangle(&args, geometry);
+                    }
+                }
+            }
+            (fonts::Font::DynamicFont(df), _) => {
+                let geom = LogicalRect::from(size);
+                if !self.should_draw(&geom) {
+                    return;
+                }
+
+                let max_size = (geom.size.cast() * self.scale_factor).cast();
+
+                // Clip glyphs not only against the global clip but also against the Text's geometry to avoid drawing outside
+                // of its boundaries (that breaks partial rendering and the cast to usize for the item relative coordinate below).
+                // FIXME: we should allow drawing outside of the Text element's boundaries.
+                let physical_clip =
+                    if let Some(logical_clip) = self.current_state.clip.intersection(&geom) {
+                        logical_clip.cast() * self.scale_factor
+                    } else {
+                        return; // This should have been caught earlier already
+                    };
+                let offset = self.current_state.offset.to_vector().cast() * self.scale_factor;
+
+                let text_visual_representation = text_input.visual_representation(None);
+                let color = self.alpha_color(text_visual_representation.text_color.color());
+
+                let selection = (!text_visual_representation.selection_range.is_empty()).then_some(
+                    SelectionInfo {
+                        selection_background: self
+                            .alpha_color(text_input.selection_background_color()),
+                        selection_color: self.alpha_color(text_input.selection_foreground_color()),
+                        selection: text_visual_representation.selection_range.clone(),
+                    },
+                );
+
+                let paragraph = TextParagraphLayout {
+                    string: &text_visual_representation.text,
+                    layout: fonts::text_layout_for_font(&df, &font_request, self.scale_factor),
+                    max_width: max_size.width_length(),
+                    max_height: max_size.height_length(),
+                    horizontal_alignment: text_input.horizontal_alignment(),
+                    vertical_alignment: text_input.vertical_alignment(),
+                    wrap: text_input.wrap(),
+                    overflow: TextOverflow::Clip,
+                    single_line: text_input.single_line(),
+                };
+
+                self.draw_text_paragraph(&paragraph, physical_clip, offset, color, selection);
+
+                let cursor_pos_and_height =
+                    text_visual_representation.cursor_position.map(|cursor_offset| {
+                        (paragraph.cursor_pos_for_byte_offset(cursor_offset), df.height())
                     });
 
                 if let Some(((cursor_x, cursor_y), cursor_height)) = cursor_pos_and_height {
@@ -3010,7 +3235,7 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
 
     fn draw_string(&mut self, string: &str, color: Color) {
         let font_request = Default::default();
-        let font = fonts::match_font(&font_request, self.scale_factor);
+        let font = self.match_font(&font_request);
         let clip = self.current_state.clip.cast() * self.scale_factor;
 
         match (font, parley_disabled()) {
@@ -3043,6 +3268,23 @@ impl<T: ProcessScene> i_slint_core::item_rendering::ItemRenderer for SceneBuilde
             }
             (fonts::Font::PixelFont(pf), _) => {
                 let layout = fonts::text_layout_for_font(&pf, &font_request, self.scale_factor);
+
+                let paragraph = TextParagraphLayout {
+                    string,
+                    layout,
+                    max_width: clip.width_length().cast(),
+                    max_height: clip.height_length().cast(),
+                    horizontal_alignment: Default::default(),
+                    vertical_alignment: Default::default(),
+                    wrap: Default::default(),
+                    overflow: Default::default(),
+                    single_line: false,
+                };
+
+                self.draw_text_paragraph(&paragraph, clip, Default::default(), color, None);
+            }
+            (fonts::Font::DynamicFont(df), _) => {
+                let layout = fonts::text_layout_for_font(&df, &font_request, self.scale_factor);
 
                 let paragraph = TextParagraphLayout {
                     string,

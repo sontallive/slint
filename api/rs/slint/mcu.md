@@ -91,6 +91,23 @@ fn main() {
 Use the `slint_build::EmbedResourcesKind::EmbedForSoftwareRenderer` configuration option to tell the Slint compiler to embed the images and fonts in the binary
 in a format that's suitable for the software based renderer we're going to use.
 
+If you plan to provide glyphs at runtime (see the Dynamic Glyph Provider section below), you can disable font
+pre-rendering to keep the binary size small:
+
+```rust,no_run
+fn main() {
+    slint_build::compile_with_config(
+        "ui/main.slint",
+        slint_build::CompilerConfiguration::new()
+            .embed_resources(slint_build::EmbedResourcesKind::EmbedForSoftwareRenderer)
+            .with_precompiled_fonts(false),
+    ).unwrap();
+}
+```
+
+Disabling precompiled fonts means the compiler does not embed bitmap fonts or register custom fonts. Make sure your
+glyph provider supports all fonts used by your UI.
+
 ## Application Structure
 
 Typically, a graphical application in hosted environments has at least three different tasks:
@@ -248,6 +265,73 @@ loop {
 In desktop and embedded environments, Slint typically uses operating system provided APIs to render the user interface using the GPU.
 In contrast, most MCUs don't have GPUs. Instead, software rendering is used where all rendering is done by software on the CPU.
 Slint provides a SoftwareRenderer for this task.
+
+#### Dynamic Glyph Provider
+
+If your UI needs text that is not known at build time or your font data lives in external storage, you can register a
+dynamic glyph provider with the software renderer. The provider supplies font metrics and glyph bitmaps on demand.
+
+```rust,no_run
+#![no_std]
+extern crate alloc;
+
+use alloc::rc::Rc;
+use core::num::NonZeroU16;
+use slint::platform::software_renderer::{
+    FontRequest, GlyphIdStrategy, GlyphProvider, MinimalSoftwareWindow, ProviderFontMetrics,
+    ProviderGlyphBitmap,
+};
+
+struct MyGlyphProvider;
+
+impl GlyphProvider for MyGlyphProvider {
+    fn supports(&self, _request: &FontRequest) -> bool {
+        true
+    }
+
+    fn font_metrics(&self, _request: &FontRequest, _px_size: u16) -> ProviderFontMetrics {
+        todo!()
+    }
+
+    fn glyph_id_for_char(
+        &self,
+        _request: &FontRequest,
+        _ch: char,
+        _strategy: GlyphIdStrategy,
+    ) -> Option<NonZeroU16> {
+        todo!()
+    }
+
+    fn render_glyph(
+        &self,
+        _request: &FontRequest,
+        _glyph_id: NonZeroU16,
+        _px_size: u16,
+    ) -> ProviderGlyphBitmap {
+        todo!()
+    }
+}
+
+let window = MinimalSoftwareWindow::new(Default::default());
+window.set_glyph_provider(Some(Rc::new(MyGlyphProvider)));
+window.set_glyph_id_strategy(GlyphIdStrategy::DynamicAssignment);
+window.set_glyph_cache_bytes(32 * 1024);
+```
+
+The `ProviderGlyphBitmap` returned by `render_glyph` contains pixel metrics and the alpha map for the glyph. Use
+`GlyphAlphaMap::Shared(Rc<[u8]>)` when the provider owns the data, or `GlyphAlphaMap::Static(&'static [u8])` for static
+tables. Set the `sdf` field to `true` if the alpha map uses signed distance field data.
+
+Choose a glyph id strategy based on your trade-offs:
+
+* `GlyphIdStrategy::DynamicAssignment` (default) supports full Unicode, but your provider must keep a stable mapping
+  from `char` to `glyph_id`, so memory grows with the number of distinct characters.
+* `GlyphIdStrategy::BmpCodepoint` uses the Unicode BMP codepoint as the glyph id, which avoids the mapping overhead but
+  limits you to U+0001..U+FFFF. Your `render_glyph` implementation should interpret the glyph id as the codepoint.
+
+The glyph bitmap cache is per font and stores alpha maps returned by your provider. The default size is 64 KiB. Rough
+guidance: a 16x16 alpha map is about 256 bytes, so a 64 KiB cache holds around 250 glyphs. Use
+`set_glyph_cache_bytes(0)` to disable caching, or tune it based on your RAM budget and text usage patterns.
 
 In the earlier example, we've instantiated a [`slint::platform::software_renderer::MinimalSoftwareWindow`]. This struct implements the
 `slint::platform::WindowAdapter` trait and also holds an instance of a [`slint::platform::software_renderer::SoftwareRenderer`]. You access it

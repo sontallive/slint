@@ -24,6 +24,7 @@ members = [
   'examples/plotter',
   'demos/printerdemo/rust',
   'demos/printerdemo_mcu',
+  'examples/dynamic_glyph_provider',
   'examples/slide_puzzle',
   'examples/speedometer/rust',
   'examples/todo/rust',

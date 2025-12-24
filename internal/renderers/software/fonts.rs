@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use super::{Fixed, PhysicalLength, PhysicalSize};
+use crate::{GlyphIdStrategy, GlyphProvider};
 use i_slint_core::Coord;
 use i_slint_core::graphics::{BitmapFont, FontRequest};
 use i_slint_core::lengths::{LogicalLength, ScaleFactor};
@@ -15,10 +16,28 @@ i_slint_core::thread_local! {
     static BITMAP_FONTS: RefCell<Vec<&'static BitmapFont>> = RefCell::default()
 }
 
-#[derive(derive_more::From, Clone)]
+/// A glyph alpha map provided to the software renderer.
+#[derive(derive_more::From, Clone, Debug)]
 pub enum GlyphAlphaMap {
+    /// Borrowed alpha map data.
     Static(&'static [u8]),
+    /// Shared alpha map data owned by the provider.
     Shared(Rc<[u8]>),
+}
+
+impl GlyphAlphaMap {
+    /// Returns the number of bytes in the alpha map.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Static(data) => data.len(),
+            Self::Shared(data) => data.len(),
+        }
+    }
+
+    /// Returns true if the alpha map has no data.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[derive(Clone)]
@@ -67,15 +86,21 @@ pub trait GlyphRenderer {
 pub(super) const DEFAULT_FONT_SIZE: LogicalLength = LogicalLength::new(12 as Coord);
 
 mod pixelfont;
+mod font_service;
+mod dynamicfont;
 #[cfg(feature = "systemfonts")]
 pub mod vectorfont;
 
 #[cfg(feature = "systemfonts")]
 pub mod systemfonts;
 
+pub(crate) use dynamicfont::DynamicFontCache;
+pub(crate) use font_service::FontService;
+
 #[derive(derive_more::From)]
 pub enum Font {
     PixelFont(pixelfont::PixelFont),
+    DynamicFont(dynamicfont::DynamicFont),
     #[cfg(feature = "systemfonts")]
     VectorFont(vectorfont::VectorFont),
 }
@@ -89,6 +114,7 @@ impl i_slint_core::textlayout::FontMetrics<PhysicalLength> for Font {
     fn ascent(&self) -> PhysicalLength {
         match self {
             Font::PixelFont(pixel_font) => pixel_font.ascent(),
+            Font::DynamicFont(dynamic_font) => dynamic_font.ascent(),
             #[cfg(feature = "systemfonts")]
             Font::VectorFont(vector_font) => vector_font.ascent(),
         }
@@ -97,6 +123,7 @@ impl i_slint_core::textlayout::FontMetrics<PhysicalLength> for Font {
     fn height(&self) -> PhysicalLength {
         match self {
             Font::PixelFont(pixel_font) => pixel_font.height(),
+            Font::DynamicFont(dynamic_font) => dynamic_font.height(),
             #[cfg(feature = "systemfonts")]
             Font::VectorFont(vector_font) => vector_font.height(),
         }
@@ -105,6 +132,7 @@ impl i_slint_core::textlayout::FontMetrics<PhysicalLength> for Font {
     fn descent(&self) -> PhysicalLength {
         match self {
             Font::PixelFont(pixel_font) => pixel_font.descent(),
+            Font::DynamicFont(dynamic_font) => dynamic_font.descent(),
             #[cfg(feature = "systemfonts")]
             Font::VectorFont(vector_font) => vector_font.descent(),
         }
@@ -113,6 +141,7 @@ impl i_slint_core::textlayout::FontMetrics<PhysicalLength> for Font {
     fn x_height(&self) -> PhysicalLength {
         match self {
             Font::PixelFont(pixel_font) => pixel_font.x_height(),
+            Font::DynamicFont(dynamic_font) => dynamic_font.x_height(),
             #[cfg(feature = "systemfonts")]
             Font::VectorFont(vector_font) => vector_font.x_height(),
         }
@@ -121,17 +150,36 @@ impl i_slint_core::textlayout::FontMetrics<PhysicalLength> for Font {
     fn cap_height(&self) -> PhysicalLength {
         match self {
             Font::PixelFont(pixel_font) => pixel_font.cap_height(),
+            Font::DynamicFont(dynamic_font) => dynamic_font.cap_height(),
             #[cfg(feature = "systemfonts")]
             Font::VectorFont(vector_font) => vector_font.cap_height(),
         }
     }
 }
 
-pub fn match_font(request: &FontRequest, scale_factor: ScaleFactor) -> Font {
+pub fn match_font(
+    request: &FontRequest,
+    scale_factor: ScaleFactor,
+    glyph_provider: Option<&Rc<dyn GlyphProvider>>,
+    glyph_id_strategy: GlyphIdStrategy,
+    dynamic_font_cache: &RefCell<dynamicfont::DynamicFontCache>,
+) -> Font {
     let requested_weight = request
         .weight
         .and_then(|weight| weight.try_into().ok())
         .unwrap_or(/* CSS normal */ 400);
+
+    let requested_pixel_size: PhysicalLength =
+        (request.pixel_size.unwrap_or(DEFAULT_FONT_SIZE).cast() * scale_factor).cast();
+
+    if let Some(provider) = glyph_provider {
+        if provider.supports(request) {
+            return dynamic_font_cache
+                .borrow_mut()
+                .get_or_create(provider.clone(), request, requested_pixel_size, glyph_id_strategy)
+                .into();
+        }
+    }
 
     let bitmap_font = BITMAP_FONTS.with(|fonts| {
         let fonts = fonts.borrow();
@@ -176,9 +224,6 @@ pub fn match_font(request: &FontRequest, scale_factor: ScaleFactor) -> Font {
             }
         }
     };
-
-    let requested_pixel_size: PhysicalLength =
-        (request.pixel_size.unwrap_or(DEFAULT_FONT_SIZE).cast() * scale_factor).cast();
 
     let nearest_pixel_size = font
         .glyphs

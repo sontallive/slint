@@ -77,6 +77,8 @@ pub enum EmbedResourcesKind {
     EmbedFiles,
     /// File names specified in .slint files will be loaded by the Slint compiler,
     /// optimized for use with the software renderer and embedded in the application binary.
+    /// This includes pre-rendered bitmap fonts unless disabled with
+    /// [`CompilerConfiguration::with_precompiled_fonts`].
     EmbedForSoftwareRenderer,
 }
 
@@ -163,6 +165,18 @@ impl CompilerConfiguration {
                 i_slint_compiler::EmbedResourcesKind::EmbedTextures
             }
         };
+        Self { config }
+    }
+
+    /// Enable or disable pre-rendering bitmap fonts when using
+    /// [`EmbedResourcesKind::EmbedForSoftwareRenderer`].
+    ///
+    /// When disabled, the compiler skips embedding fonts and does not generate font registration
+    /// calls. Use this when you provide glyphs at runtime via a glyph provider.
+    #[must_use]
+    pub fn with_precompiled_fonts(self, enable: bool) -> Self {
+        let mut config = self.config;
+        config.embed_glyphs = enable;
         Self { config }
     }
 

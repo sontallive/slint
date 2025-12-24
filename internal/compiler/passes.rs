@@ -262,7 +262,7 @@ pub async fn run_passes(
 
     match type_loader.compiler_config.embed_resources {
         #[cfg(feature = "software-renderer")]
-        crate::EmbedResourcesKind::EmbedTextures => {
+        crate::EmbedResourcesKind::EmbedTextures if type_loader.compiler_config.embed_glyphs => {
             let mut characters_seen = std::collections::HashSet::new();
 
             let sf = type_loader.compiler_config.const_scale_factor.unwrap_or(1.) as f64;
@@ -288,6 +288,10 @@ pub async fn run_passes(
                 std::iter::once(&*doc).chain(type_loader.all_documents()),
                 diag,
             );
+        }
+        #[cfg(feature = "software-renderer")]
+        crate::EmbedResourcesKind::EmbedTextures => {
+            // Skip font embedding and font registration when explicitly disabled.
         }
         _ => {
             // Create font registration calls for custom fonts, unless we're embedding pre-rendered glyphs

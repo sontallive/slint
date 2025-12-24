@@ -1,0 +1,25 @@
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "dynamic-glyph-provider"
+version = "1.15.0"
+authors = ["Slint Developers <info@slint.dev>"]
+edition.workspace = true
+publish = false
+license = "MIT"
+
+[[bin]]
+path = "main.rs"
+name = "dynamic-glyph-provider"
+
+[dependencies]
+fontdue.workspace = true
+slint = { path = "../../api/rs/slint", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+
+# 窗口和显示
+winit = "0.30"
+softbuffer = "0.4"
+
+[build-dependencies]
+slint-build = { path = "../../api/rs/build" }
