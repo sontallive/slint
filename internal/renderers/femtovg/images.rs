@@ -209,6 +209,18 @@ impl<R: femtovg::Renderer + TextureImporter> Texture<R> {
             }
             _ => {
                 let buffer = image.render_to_buffer(target_size_for_scalable_source)?;
+                // Convert Luma8 to RGBA8 since femtovg doesn't support grayscale images
+                let buffer = match buffer {
+                    SharedImageBuffer::Luma8(luma_buffer) => {
+                        use i_slint_core::graphics::SharedPixelBuffer;
+                        SharedImageBuffer::RGBA8(SharedPixelBuffer::clone_from_slice(
+                            &luma_buffer.as_bytes().iter().flat_map(|&luma| [luma, luma, luma, 255]).collect::<Vec<_>>(),
+                            luma_buffer.width(),
+                            luma_buffer.height(),
+                        ))
+                    }
+                    other => other,
+                };
                 let (image_source, flags) = image_buffer_to_image_source(&buffer);
                 canvas.borrow_mut().create_image(image_source, image_flags | flags).unwrap()
             }
@@ -324,6 +336,10 @@ fn image_buffer_to_image_source(
             },
             femtovg::ImageFlags::PREMULTIPLIED,
         ),
+        SharedImageBuffer::Luma8(_) => {
+            // Luma8 should have been converted to RGBA8 before calling this function
+            unreachable!("Luma8 should be converted before calling image_buffer_to_image_source")
+        }
     }
 }
 

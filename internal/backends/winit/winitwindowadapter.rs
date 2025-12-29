@@ -142,6 +142,11 @@ fn icon_to_winit(
                     .chain(std::iter::once(alpha as u8))
             })
             .collect(),
+        SharedImageBuffer::Luma8(pixels) => pixels
+            .as_bytes()
+            .iter()
+            .flat_map(|&luma| IntoIterator::into_iter([luma, luma, luma, 255]))
+            .collect(),
     };
 
     winit::window::Icon::from_rgba(rgba_pixels, pixel_buffer.width(), pixel_buffer.height()).ok()

@@ -93,6 +93,8 @@ Use two separate caches per font request:
 - Value: `ProviderGlyphBitmap`
 - Eviction policy: LRU with configurable memory cap (bytes or entries).
 - Safe to evict because glyph_id -> char remains stable (for Strategy 1).
+- Set the cache size to `0` via `SoftwareRenderer::set_glyph_cache_bytes(0)` to disable the internal bitmap cache
+  and rely entirely on the glyph provider for caching.
 
 ### Font Keying
 A `FontKey` should include:
@@ -121,6 +123,7 @@ A `FontKey` should include:
 ## Risks and Limitations
 - `glyph_id` is limited to `NonZeroU16` (max 65535 IDs).
 - Strategy 1 requires persistent char->id mapping; memory grows with distinct characters.
+- The Strategy 1 char->id mapping is not evicted (even if the bitmap cache is disabled).
 - No complex script shaping (consistent with current software renderer behavior).
 - Cache size must be carefully chosen to fit MCU RAM limits.
 

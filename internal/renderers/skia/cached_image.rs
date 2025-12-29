@@ -70,6 +70,7 @@ pub(crate) fn as_skia_image(
                 SharedImageBuffer::RGB8(_) => unreachable!(),
                 SharedImageBuffer::RGBA8(_) => unreachable!(),
                 SharedImageBuffer::RGBA8Premultiplied(pixels) => pixels,
+                SharedImageBuffer::Luma8(_) => unreachable!(),
             };
 
             let image_info = skia_safe::ImageInfo::new(
@@ -138,6 +139,21 @@ fn image_buffer_to_skia_image(buffer: &SharedImageBuffer) -> Option<skia_safe::I
             skia_safe::ColorType::RGBA8888,
             skia_safe::AlphaType::Premul,
         ),
+        SharedImageBuffer::Luma8(pixels) => {
+            // Convert grayscale to RGBA8
+            let rgba = pixels
+                .as_bytes()
+                .iter()
+                .flat_map(|&luma| IntoIterator::into_iter([luma, luma, luma, 255]))
+                .collect::<Vec<u8>>();
+            (
+                skia_safe::Data::new_copy(&*rgba),
+                pixels.width() as usize * 4,
+                pixels.size(),
+                skia_safe::ColorType::RGBA8888,
+                skia_safe::AlphaType::Unpremul,
+            )
+        }
     };
     let image_info = skia_safe::ImageInfo::new(
         skia_safe::ISize::new(size.width as i32, size.height as i32),

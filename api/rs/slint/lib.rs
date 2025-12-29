@@ -226,7 +226,7 @@ pub use i_slint_common::sharedfontique::{
 };
 pub use i_slint_core::api::*;
 pub use i_slint_core::graphics::{
-    Brush, Color, Image, LoadImageError, Rgb8Pixel, Rgba8Pixel, RgbaColor, SharedPixelBuffer,
+    Brush, Color, Image, LoadImageError, Luma8Pixel, Rgb8Pixel, Rgba8Pixel, RgbaColor, SharedPixelBuffer,
 };
 pub use i_slint_core::model::{
     FilterModel, MapModel, Model, ModelExt, ModelNotify, ModelPeer, ModelRc, ModelTracker,

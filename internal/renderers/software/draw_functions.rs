@@ -268,6 +268,19 @@ pub(super) fn draw_texture_line(
                     }
                 }
             }
+            TexturePixelFormat::Luma8 => {
+                for pix in line_buffer {
+                    let pos = pos(1).0;
+                    let gray = ((data[pos] as u16 * alpha as u16) / 255) as u8;
+                    let c = PremultipliedRgbaColor {
+                        alpha: (alpha as u16) as u8,
+                        red: gray,
+                        green: gray,
+                        blue: gray,
+                    };
+                    pix.blend(c);
+                }
+            }
             TexturePixelFormat::AlphaMap => {
                 for pix in line_buffer {
                     let pos = pos(1).0;

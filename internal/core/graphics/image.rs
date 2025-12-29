@@ -153,6 +153,8 @@ pub type Rgb8Pixel = rgb::RGB8;
 /// encoded as u8.
 pub type Rgba8Pixel = rgb::RGBA8;
 
+/// Convenience alias for a pixel with one color channel (grayscale), encoded as u8.
+pub type Luma8Pixel = rgb::Gray<u8>;
 /// SharedImageBuffer is a container for images that are stored in CPU accessible memory.
 ///
 /// The SharedImageBuffer's variants represent the different common formats for encoding
@@ -174,6 +176,9 @@ pub enum SharedImageBuffer {
     /// Only construct this format if you know that your pixels are encoded this way. It is more efficient
     /// for rendering.
     RGBA8Premultiplied(SharedPixelBuffer<Rgba8Pixel>),
+    /// This variant holds the data for an image where each pixel has one color channel (grayscale)
+    /// and the channel is encoded as unsigned byte.
+    Luma8(SharedPixelBuffer<Luma8Pixel>),
 }
 
 impl SharedImageBuffer {
@@ -184,6 +189,7 @@ impl SharedImageBuffer {
             Self::RGB8(buffer) => buffer.width(),
             Self::RGBA8(buffer) => buffer.width(),
             Self::RGBA8Premultiplied(buffer) => buffer.width(),
+            Self::Luma8(buffer) => buffer.width(),
         }
     }
 
@@ -194,6 +200,7 @@ impl SharedImageBuffer {
             Self::RGB8(buffer) => buffer.height(),
             Self::RGBA8(buffer) => buffer.height(),
             Self::RGBA8Premultiplied(buffer) => buffer.height(),
+            Self::Luma8(buffer) => buffer.height(),
         }
     }
 
@@ -204,6 +211,7 @@ impl SharedImageBuffer {
             Self::RGB8(buffer) => buffer.size(),
             Self::RGBA8(buffer) => buffer.size(),
             Self::RGBA8Premultiplied(buffer) => buffer.size(),
+            Self::Luma8(buffer) => buffer.size(),
         }
     }
 }
@@ -220,6 +228,9 @@ impl PartialEq for SharedImageBuffer {
             Self::RGBA8Premultiplied(lhs_buffer) => {
                 matches!(other, Self::RGBA8Premultiplied(rhs_buffer) if lhs_buffer.data.as_ptr().eq(&rhs_buffer.data.as_ptr()))
             }
+            Self::Luma8(lhs_buffer) => {
+                matches!(other, Self::Luma8(rhs_buffer) if lhs_buffer.data.as_ptr().eq(&rhs_buffer.data.as_ptr()))
+            }
         }
     }
 }
@@ -234,6 +245,8 @@ pub enum TexturePixelFormat {
     Rgba,
     /// Red, green, blue, alpha. 32bits. The color are premultiplied by alpha
     RgbaPremultiplied,
+    /// Grayscale. 8bits.
+    Luma8,
     /// Alpha map. 8bits. Each pixel is an alpha value. The color is specified separately.
     AlphaMap,
     /// Distance field. 8bit interpreted as i8.
@@ -250,6 +263,7 @@ impl TexturePixelFormat {
             TexturePixelFormat::Rgb => 3,
             TexturePixelFormat::Rgba => 4,
             TexturePixelFormat::RgbaPremultiplied => 4,
+            TexturePixelFormat::Luma8 => 1,
             TexturePixelFormat::AlphaMap => 1,
             TexturePixelFormat::SignedDistanceField => 1,
         }
@@ -518,7 +532,16 @@ impl ImageInner {
                             TexturePixelFormat::SignedDistanceField => {
                                 todo!("converting from a signed distance field to an image")
                             }
-                        };
+                            TexturePixelFormat::Luma8 => {
+                                let mut iter = source.iter().map(|&p| Rgba8Pixel {
+                                    r: p,
+                                    g: p,
+                                    b: p,
+                                    a: 255,
+                                });
+                                slice.fill_with(|| iter.next().unwrap());
+                            }
+                            }
                     }
                 }
                 Some(SharedImageBuffer::RGBA8Premultiplied(buffer))
@@ -722,6 +745,14 @@ impl Image {
             buffer: SharedImageBuffer::RGB8(buffer),
         })
     }
+    /// Creates a new Image from the specified shared pixel buffer, where each pixel has one color
+    /// channel (grayscale) encoded as u8.
+    pub fn from_luma8(buffer: SharedPixelBuffer<Luma8Pixel>) -> Self {
+        Image(ImageInner::EmbeddedImage {
+            cache_key: ImageCacheKey::Invalid,
+            buffer: SharedImageBuffer::Luma8(buffer),
+        })
+    }
 
     /// Creates a new Image from the specified shared pixel buffer, where each pixel has four color
     /// channels (red, green, blue and alpha) encoded as u8.
@@ -765,8 +796,13 @@ impl Image {
             SharedImageBuffer::RGBA8(buffer) => buffer,
             SharedImageBuffer::RGBA8Premultiplied(buffer) => SharedPixelBuffer::<Rgba8Pixel> {
                 width: buffer.width,
-                height: buffer.height,
                 data: buffer.data.into_iter().map(Image::premultiplied_rgba_to_rgba).collect(),
+                height: buffer.height,
+            },
+            SharedImageBuffer::Luma8(buffer) => SharedPixelBuffer::<Rgba8Pixel> {
+                width: buffer.width,
+                height: buffer.height,
+                data: buffer.data.into_iter().map(|p| Rgba8Pixel { r: p.value(), g: p.value(), b: p.value(), a: 255 }).collect(),
             },
         })
     }
@@ -787,6 +823,11 @@ impl Image {
                 data: buffer.data.into_iter().map(Image::rgba_to_premultiplied_rgba).collect(),
             },
             SharedImageBuffer::RGBA8Premultiplied(buffer) => buffer,
+            SharedImageBuffer::Luma8(buffer) => SharedPixelBuffer::<Rgba8Pixel> {
+                width: buffer.width,
+                height: buffer.height,
+                data: buffer.data.into_iter().map(|p| Rgba8Pixel { r: p.value(), g: p.value(), b: p.value(), a: 255 }).collect(),
+            },
         })
     }
 
